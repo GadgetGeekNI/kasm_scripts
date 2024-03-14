@@ -1,0 +1,59 @@
+---
+
+image: python:alpine
+
+options:
+  docker: true
+
+definitions:
+  caches:
+    docker-cache: /var/docker
+  services:
+    docker:
+      memory: 512
+  steps:
+    - step: &build-image
+        name: Build and Push Container Image
+        deployment: development
+        size: 2x
+        caches:
+          - pip
+        script:
+          # Search for all Dockerfiles and build them individually.
+          - |
+            find . -maxdepth 1 -type f -name "dockerfile_*" | while read -r dockerfile; do
+              # Set Dockerfile name.
+              DOCKERFILE_NAME=$(basename "$dockerfile")
+
+              # Extract the image name from the Dockerfile path.
+              IMAGE_NAME=$(basename "$DOCKERFILE_NAME" | sed 's/^dockerfile_//')
+
+              DOCKER_FULL_IMAGE_NAME="$DOCKER_REPO_NAME/$IMAGE_NAME:$KASM_BUILD_NUMBER"
+
+              # Check for changes to the Dockerfile.
+              apk add --no-cache git
+              git diff HEAD^ HEAD --name-only | grep "$DOCKERFILE_NAME" > /dev/null && CACHE_INVALIDATION=true || CACHE_INVALIDATION=false
+
+              # Build the Docker image.
+              if [ "$CACHE_INVALIDATION" = true ]; then
+                echo "Changes detected. Building $IMAGE_NAME."
+                DOCKER_FULL_IMAGE_NAME="$DOCKER_REPO_NAME/$IMAGE_NAME:$KASM_BUILD_NUMBER"
+                docker build -t "$DOCKER_FULL_IMAGE_NAME" -f "$dockerfile" .
+
+                # Trigger the Docker Push Step for the selected image.
+                echo "Pushing $IMAGE_NAME to our Docker Repo"
+                docker push $DOCKER_FULL_IMAGE_NAME
+
+              else
+                echo "No changes detected to $IMAGE_NAME Dockerfile. Skipping Build!"
+              fi
+            done
+
+pipelines:
+  branches:
+    development:
+      - step: *build-image
+    production:
+      - step: 
+          <<: *build-image
+          deployment: production
